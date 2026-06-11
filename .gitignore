@@ -8,6 +8,7 @@ __pycache__/
 
 # Database (regenerate with: flask --app server/server.py init-db)
 intracomms.db
+intracomms.db.bak
 
 # Secrets & TLS keys — never commit these
 .env
