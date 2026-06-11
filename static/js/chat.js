@@ -1195,6 +1195,18 @@
         var isOwn      = Number(msg.sender_id) === currentUserId;
         var isBcast    = msg.message_type === "broadcast";
         var senderName = escapeHtml(msg.sender_username || "Unknown");
+
+        if (!isOwn && typeof Notify !== "undefined") {
+            var preview = msg.file_record ? "📎 Sent an attachment"
+                        : msg.is_e2ee     ? "🔒 Encrypted message"
+                        : String(msg.content || "").slice(0, 120);
+            Notify.show({
+                title:  (msg.sender_username || "Unknown") + (isBcast ? " (broadcast)" : ""),
+                body:   preview,
+                tag:    "msg-" + (isBcast ? "broadcast" : msg.sender_id),
+                chatId: isBcast ? "broadcast" : msg.sender_id,
+            });
+        }
         var time       = escapeHtml(timeStr(msg.timestamp));
         var colorCls   = avatarColorClass(msg.sender_id);
         var fr         = msg.file_record || null;
@@ -1405,6 +1417,12 @@
                 P2PTransfer.handleOffer(payload, E2EE.getPrivateKey()).catch(function (e) {
                     console.error("[P2P] handleOffer error", e);
                 });
+                if (typeof Notify !== "undefined") Notify.show({
+                    title:  (payload.sender_name || "Someone") + " wants to send you a file",
+                    body:   (payload.file_name || "file") + " · " + formatBytes(payload.file_size || 0),
+                    tag:    "p2p-" + payload.transfer_id,
+                    chatId: payload.sender_id,
+                });
             }
         } else if (type === "p2p_answer") {
             if (typeof P2PTransfer !== "undefined")
@@ -1423,8 +1441,19 @@
                 _p2pCards.delete(payload.transfer_id);
             }
             setStatus("File transfer was declined.");
+            if (typeof Notify !== "undefined") Notify.show({
+                title: "File transfer declined",
+                body:  "The recipient declined your file.",
+                tag:   "p2p-" + payload.transfer_id,
+            });
         } else if (type === "call_invite") {
             if (typeof VoiceChat !== "undefined") VoiceChat.handleInvite(payload);
+            if (typeof Notify !== "undefined") Notify.show({
+                title:  "📞 Incoming voice call",
+                body:   (payload.caller_name || "Someone") + " is calling you",
+                tag:    "call-" + payload.call_id,
+                chatId: payload.caller_id,
+            });
         } else if (type === "call_accept") {
             if (typeof VoiceChat !== "undefined") VoiceChat.handleAccept(payload);
         } else if (type === "call_decline") {
@@ -1436,6 +1465,12 @@
         } else if (type === "user_joined") {
             addContactRow(payload);
             setUserOnline(payload.user_id, true);
+            if (typeof Notify !== "undefined") Notify.show({
+                title:  "New user joined",
+                body:   (payload.username || "Someone") + " joined IntraComms",
+                tag:    "joined-" + payload.user_id,
+                chatId: payload.user_id,
+            });
         } else if (type === "client_config") {
             UPLOAD_CONFIG = payload || UPLOAD_CONFIG;
             connectionTier = payload.tier || connectionTier;
@@ -1758,6 +1793,11 @@
                         card.complete(name, size);
                         _p2pCards.delete(transferId);
                         setStatus("Connected");
+                        if (typeof Notify !== "undefined") Notify.show({
+                            title: "File sent ✓",
+                            body:  name + " · " + formatBytes(size) + " delivered",
+                            tag:   "p2p-" + transferId,
+                        });
                     });
                 })
                 .catch(function (err) {
@@ -1829,6 +1869,11 @@
                 actionsEl.hidden     = true;
                 _p2pSenders.delete(transferId);
                 setTimeout(function () { overlay.remove(); }, 3000);
+                if (typeof Notify !== "undefined") Notify.show({
+                    title: "File received ✓",
+                    body:  name + " · " + formatBytes(size) + " saved to Downloads",
+                    tag:   "p2p-" + transferId,
+                });
             });
 
             P2PTransfer.accept(transferId);
@@ -2305,6 +2350,15 @@
         if (voiceDeclineBtn) {
             voiceDeclineBtn.addEventListener("click", function () { VoiceChat.declineCall(); });
         }
+    }
+
+    // ── Desktop notification wiring ─────────────────────────────────────────
+    if (typeof Notify !== "undefined") {
+        Notify.init();
+        Notify.setOpenChat(function (chatId) {
+            var row = document.querySelector('.conversation-row[data-chat-id="' + chatId + '"]');
+            if (row) setActiveChat(row);
+        });
     }
 
     // ── P2P transfer wiring ─────────────────────────────────────────────────

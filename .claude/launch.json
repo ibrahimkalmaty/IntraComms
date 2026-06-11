@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "intracomms",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:INTRACOMMS_HTTP='1'; & 'D:\\IntraComms\\venv\\Scripts\\python.exe' 'D:\\IntraComms\\server\\server.py'"
+      ],
+      "port": 5000
+    }
+  ]
+}

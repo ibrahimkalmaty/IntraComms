@@ -1737,7 +1737,12 @@ if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"
     _cert = BASE_DIR / "cert.pem"
     _key  = BASE_DIR / "key.pem"
-    ssl_ok = _ensure_ssl_cert(_cert, _key)
+    # INTRACOMMS_HTTP=1 forces plain HTTP (localhost previews/tools that can't
+    # accept the self-signed cert; crypto APIs still work on localhost).
+    if os.environ.get("INTRACOMMS_HTTP") == "1":
+        ssl_ok = False
+    else:
+        ssl_ok = _ensure_ssl_cert(_cert, _key)
     # eventlet (used by Flask-SocketIO) takes certfile/keyfile, not ssl_context
     ssl_kwargs = {"certfile": str(_cert), "keyfile": str(_key)} if ssl_ok else {}
     socketio.run(app, host="0.0.0.0", debug=debug_mode, use_reloader=debug_mode,
