@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}IntraComms - LAN Messaging{% endblock %}
+
+{% block content %}
+<section class="home-grid">
+    <div class="hero-copy">
+        <p class="eyebrow">LAN-based internal communication</p>
+        <h1>IntraComms</h1>
+        <p class="lead">
+            Secure offline messaging and file sharing for local teams, with a chat-first interface built for fast internal updates.
+        </p>
+        <div class="hero-actions">
+                <a class="btn btn-primary" href="{{ url_for('register') }}">Create Account</a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('login') }}">Login</a>
+        </div>
+    </div>
+    <div class="preview-phone" aria-label="Chat preview">
+        <div class="preview-header">
+            <span class="avatar">IC</span>
+            <div>
+                <strong>Ops Room</strong>
+                <small><span class="status-dot"></span> LAN ready</small>
+            </div>
+        </div>
+        <div class="preview-thread">
+            <div class="message-bubble">Morning sync is ready.</div>
+            <div class="message-bubble sent">Uploading the shift handoff now.</div>
+            <div class="message-bubble">Received. Broadcast after review.</div>
+        </div>
+        <div class="preview-composer">
+            <span>Write a message</span>
+            <button class="send-btn" aria-label="Send preview" type="button">-&gt;</button>
+        </div>
+    </div>
+</section>
+{% endblock %}

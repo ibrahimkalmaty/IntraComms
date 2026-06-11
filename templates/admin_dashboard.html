@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - IntraComms{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Administration</p>
+        <h1>User Management</h1>
+        <p class="muted">View users, control access, and manage roles.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
+</div>
+
+<div class="table-shell">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>User</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Joined</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+                <tr>
+                    <td>
+                        <strong>{{ user.username }}</strong>
+                        {% if user.id == current_user.id %}
+                            <span class="badge text-bg-light">you</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ user.email }}</td>
+                    <td>
+                        <form action="{{ url_for('admin_update_role', user_id=user.id) }}" method="post" class="inline-form">
+                            <select class="select-control" name="role" {% if user.id == current_user.id %}disabled{% endif %}>
+                                <option value="user" {% if user.role == "user" %}selected{% endif %}>user</option>
+                                <option value="admin" {% if user.role == "admin" %}selected{% endif %}>admin</option>
+                            </select>
+                            {% if user.id != current_user.id %}
+                                <button class="btn btn-outline-secondary btn-sm" type="submit">Save</button>
+                            {% endif %}
+                        </form>
+                    </td>
+                    <td>
+                        {% if user.is_active %}
+                            <span class="badge status-active">active</span>
+                        {% else %}
+                            <span class="badge status-inactive">inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ user.created_at.strftime("%Y-%m-%d") }}</td>
+                    <td class="actions-cell">
+                        {% if user.id == current_user.id %}
+                            <span class="text-secondary small">Protected</span>
+                        {% elif user.is_active %}
+                            <form action="{{ url_for('admin_deactivate_user', user_id=user.id) }}" method="post">
+                                <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+                            </form>
+                        {% else %}
+                            <form action="{{ url_for('admin_activate_user', user_id=user.id) }}" method="post">
+                                <button class="btn btn-primary btn-sm" type="submit">Restore</button>
+                            </form>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr>
+                    <td colspan="6" class="text-secondary">No users found.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+
+{% block body_class %}chat-page{% endblock %}
+{% block title %}Dashboard — IntraComms{% endblock %}
+
+{% block content %}
+<div id="chat-data"
+     data-current-user-id="{{ current_user.id }}"
+     data-current-username="{{ current_user.username }}"
+     data-user-pubkeys="{{ user_pubkeys | tojson | e }}"></div>
+
+<div class="chat-layout">
+
+    {# ── Sidebar ── #}
+    <aside class="conversation-rail" aria-label="Conversations">
+
+        <div class="rail-header">
+            <div>
+                <p class="eyebrow">Messages</p>
+                <h1>IntraComms</h1>
+            </div>
+            <span class="badge">{{ users|length + 1 }} members</span>
+        </div>
+
+        {# Tab bar #}
+        <div class="rail-tabs" role="tablist" aria-label="View">
+            <button class="rail-tab rail-tab-active" id="tab-btn-chats"
+                    role="tab" aria-selected="true" aria-controls="tab-panel-chats"
+                    data-tab="chats">Chats</button>
+            <button class="rail-tab" id="tab-btn-contacts"
+                    role="tab" aria-selected="false" aria-controls="tab-panel-contacts"
+                    data-tab="contacts">Contacts</button>
+        </div>
+
+        {# Chats panel — recent conversations #}
+        <div class="tab-panel" id="tab-panel-chats" role="tabpanel" aria-labelledby="tab-btn-chats">
+            <label class="search-shell" for="chat-search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input id="chat-search" type="search" placeholder="Search" autocomplete="off">
+            </label>
+
+            <div class="conversation-list" role="listbox" aria-label="Recent chats">
+                {% for conv in recent_convos %}
+                {% if conv.kind == "broadcast" %}
+                <button class="conversation-row conversation-active"
+                        type="button" role="option"
+                        data-chat-id="broadcast" data-chat-name="Everyone" data-chat-kind="broadcast"
+                        aria-pressed="true" aria-selected="true">
+                    <span class="avatar avatar-sm avatar-broadcast" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                    </span>
+                    <span class="conversation-copy">
+                        <span class="conversation-name-row">
+                            <strong>Everyone</strong>
+                            <small class="conversation-time" id="preview-time-broadcast">
+                                {% if conv.last_time %}{{ conv.last_time.strftime("%H:%M") }}{% endif %}
+                            </small>
+                        </span>
+                        <small class="conversation-preview" id="preview-broadcast">
+                            {% if conv.last_content %}{{ ("You: " if conv.sender_is_me else "") + conv.last_content[:60] }}{% else %}Shared room — all users{% endif %}
+                        </small>
+                    </span>
+                </button>
+                {% else %}
+                <button class="conversation-row"
+                        type="button" role="option"
+                        data-chat-id="{{ conv.key }}"
+                        data-chat-name="{{ conv.name }}"
+                        data-chat-kind="direct"
+                        data-color-index="{{ conv.color_index }}"
+                        aria-pressed="false" aria-selected="false">
+                    <span class="avatar avatar-sm avatar-c{{ conv.color_index }}" aria-hidden="true">
+                        {{ conv.name[:1]|upper }}
+                    </span>
+                    <span class="conversation-copy">
+                        <span class="conversation-name-row">
+                            <strong>{{ conv.name }}</strong>
+                            <small class="conversation-time" id="preview-time-{{ conv.key }}">
+                                {{ conv.last_time.strftime("%H:%M") }}
+                            </small>
+                        </span>
+                        <small class="conversation-preview" id="preview-{{ conv.key }}">
+                            {{ ("You: " if conv.sender_is_me else "") + conv.last_content[:60] }}
+                        </small>
+                    </span>
+                    <span class="status-dot" aria-label="Online"></span>
+                </button>
+                {% endif %}
+                {% else %}
+                <div class="empty-state" style="padding:24px 16px;font-size:.82rem;">
+                    No conversations yet.
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        {# Contacts panel — all workspace users #}
+        <div class="tab-panel" id="tab-panel-contacts" role="tabpanel" aria-labelledby="tab-btn-contacts" hidden>
+            <label class="search-shell" for="contact-search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input id="contact-search" type="search" placeholder="Search contacts" autocomplete="off">
+            </label>
+
+            <div class="conversation-list" role="listbox" aria-label="All contacts">
+                {% for user in users %}
+                <button class="conversation-row contact-row"
+                        type="button"
+                        data-chat-id="{{ user.id }}"
+                        data-chat-name="{{ user.username }}"
+                        data-chat-kind="direct"
+                        data-color-index="{{ user.id % 8 }}"
+                        aria-pressed="false" aria-selected="false">
+                    <span class="avatar avatar-sm avatar-c{{ user.id % 8 }}" aria-hidden="true">
+                        {{ user.username[:1]|upper }}
+                    </span>
+                    <span class="conversation-copy">
+                        <span class="conversation-name-row">
+                            <strong>{{ user.username }}</strong>
+                            {% if user.role == "admin" %}
+                            <span class="badge" style="font-size:.6rem;padding:1px 6px;background:rgba(37,99,235,.1);color:var(--accent);">Admin</span>
+                            {% endif %}
+                        </span>
+                        <small class="conversation-preview">{{ user.email }}</small>
+                    </span>
+                    <span class="status-dot" aria-label="Online"></span>
+                </button>
+                {% else %}
+                <div class="empty-state" style="padding:24px 16px;font-size:.82rem;">
+                    No other users yet.
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+    </aside>
+
+    {# ── Chat panel ── #}
+    <section class="chat-panel" aria-label="Messages">
+
+        {# Header #}
+        <div class="chat-header">
+            <div class="chat-title-group">
+                <button class="back-btn" id="back-btn" aria-label="Back to conversations">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                </button>
+                <span class="avatar avatar-broadcast" id="chat-avatar" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                </span>
+                <div>
+                    <h2 id="chat-title">Everyone</h2>
+                    <p class="chat-subtitle" id="chat-subtitle">All users &middot; LAN</p>
+                </div>
+            </div>
+            <button class="call-btn" id="call-btn" aria-label="Start voice call" title="Voice call">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6.09 6.09l.86-.86a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+            </button>
+            <div class="connection-pill" id="chat-status">
+                <span class="pulse-dot" aria-hidden="true"></span>
+                Connecting&hellip;
+            </div>
+        </div>
+
+        {# Messages #}
+        <div class="message-list" id="message-list" aria-live="polite" aria-label="Messages">
+
+            <div class="system-message" id="chat-context">
+                Broadcast messages from all users appear here.
+            </div>
+
+            {% for message in messages %}
+            {% set fr = message.file_record %}
+            <article
+                class="message-item{% if message.sender_id == current_user.id %} message-own{% endif %}"
+                data-message-id="{{ message.id }}"
+                data-message-type="{{ message.message_type }}"
+                data-sender-id="{{ message.sender_id }}"
+                data-receiver-id="{{ message.receiver_id or '' }}"
+                {% if fr %}data-file-name="{{ fr.original_filename }}"{% endif %}>
+
+                {% if message.sender_id != current_user.id %}
+                <span class="avatar avatar-thread avatar-c{{ (message.sender_id or 0) % 8 }}"
+                      aria-hidden="true">
+                    {{ (message.sender.username if message.sender else "U")[:1]|upper }}
+                </span>
+                {% endif %}
+
+                <div class="message-stack">
+                    {% if message.sender_id != current_user.id and message.message_type == "broadcast" %}
+                    <div class="message-sender-name">
+                        {{ message.sender.username if message.sender else "Unknown" }}
+                    </div>
+                    {% endif %}
+
+                    <div class="message-bubble{% if fr and not message.is_deleted %} media-bubble{% endif %}">
+                        {% if message.is_deleted %}
+                            <p class="message-deleted">Message deleted</p>
+                        {% elif fr %}
+                            {% if fr.is_e2ee %}
+                                {# E2EE file — blob is encrypted; JS decrypts client-side #}
+                                {% if fr.hint_category == 'audio' %}
+                                {# Voice message — JS renders playback bubble on page load #}
+                                <div class="vm-bubble-placeholder" data-file-id="{{ fr.id }}"></div>
+                                {% else %}
+                                {% set auto = fr.hint_category == 'image' %}
+                                <div class="media-wrap media-e2ee">
+                                    <button class="e2ee-dl-btn"
+                                            data-file-id="{{ fr.id }}"
+                                            {% if auto %}data-auto-decrypt="1"{% endif %}>
+                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                            <path d="M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm3-9H9V6a3 3 0 0 1 6 0v2z"/>
+                                        </svg>
+                                        {% if auto %}
+                                            <span class="e2ee-dl-label e2ee-dl-loading">Decrypting…</span>
+                                        {% else %}
+                                            <span class="e2ee-dl-label">{{ fr.original_filename if fr.original_filename != '[encrypted]' else 'Encrypted file' }} · click to decrypt &amp; open</span>
+                                        {% endif %}
+                                    </button>
+                                </div>
+                                {% endif %}
+                            {% else %}
+                            {% set cat = fr.media_category() %}
+                            {% set furl = url_for('serve_file', file_id=fr.id) %}
+                            {% if cat == "image" %}
+                                {% set thumb_url = url_for('serve_thumbnail', file_id=fr.id) if fr.thumbnail_filename else furl %}
+                                <a href="{{ furl }}" target="_blank" rel="noopener" class="media-img-link"
+                                   onclick="expandPhoto(this.querySelector('img'));return false;">
+                                    <img class="media-img{% if fr.thumbnail_filename %} thumb-preview{% endif %}"
+                                         src="{{ thumb_url }}" data-full="{{ furl }}"
+                                         alt="{{ fr.original_filename }}" loading="lazy">
+                                </a>
+                            {% elif cat == "video" %}
+                                <video class="media-video" controls preload="none">
+                                    <source src="{{ furl }}" type="{{ fr.mime_type }}">
+                                </video>
+                            {% elif cat == "audio" %}
+                                <audio class="media-audio" controls preload="none">
+                                    <source src="{{ furl }}" type="{{ fr.mime_type }}">
+                                </audio>
+                            {% else %}
+                                <a class="file-card" href="{{ furl }}"
+                                   download="{{ fr.original_filename }}">
+                                    <span class="file-card-icon" aria-hidden="true">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="2"
+                                             stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                            <polyline points="14 2 14 8 20 8"/>
+                                        </svg>
+                                    </span>
+                                    <span class="file-card-info">
+                                        <strong>{{ fr.original_filename }}</strong>
+                                        <small>{{ fr.file_size_human() }}</small>
+                                    </span>
+                                    <span class="file-card-dl" aria-hidden="true">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="2"
+                                             stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                            <polyline points="7 10 12 15 17 10"/>
+                                            <line x1="12" y1="15" x2="12" y2="3"/>
+                                        </svg>
+                                    </span>
+                                </a>
+                            {% endif %}
+                            {% endif %}{# end is_e2ee else #}
+                        {% elif message.is_e2ee and message.message_type == 'direct' %}
+                            {# Ciphertext — JS will decrypt and replace this element after key init.
+                               Sender reads their own copy; recipient reads the recipient copy. #}
+                            {% if message.sender_id == current_user.id %}
+                            <p class="message-text e2ee-pending"
+                               data-ct="{{ message.sender_copy or '' }}"
+                               data-ep="{{ message.sender_ephemeral_pub or '' }}"
+                               data-iv="{{ message.sender_iv or '' }}">
+                            {% else %}
+                            <p class="message-text e2ee-pending"
+                               data-ct="{{ message.content }}"
+                               data-ep="{{ message.ephemeral_pub }}"
+                               data-iv="{{ message.iv }}">
+                            {% endif %}
+                                <span class="e2ee-lock-icon" aria-hidden="true"></span>
+                                Decrypting&hellip;
+                            </p>
+                        {% else %}
+                            <p class="message-text">{{ message.content }}</p>
+                        {% endif %}
+                        <div class="message-time-row">
+                            {% if message.sender_id == current_user.id and not message.is_deleted %}
+                            <button class="msg-del-btn" data-msg-id="{{ message.id }}"
+                                    title="Delete message" aria-label="Delete message">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                                     stroke="currentColor" stroke-width="2"
+                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                    <path d="M10 11v6M14 11v6"/>
+                                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                </svg>
+                            </button>
+                            {% endif %}
+                            {% if message.is_e2ee and message.message_type == 'direct' %}
+                            <span class="e2ee-badge" title="End-to-end encrypted" aria-label="End-to-end encrypted">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm3-9H9V6a3 3 0 0 1 6 0v2z"/>
+                                </svg>
+                            </span>
+                            {% endif %}
+                            <span class="message-time">{{ message.timestamp.strftime("%H:%M") }}</span>
+                            {% if message.sender_id == current_user.id %}
+                            <span class="message-tick" aria-label="Sent">
+                                <svg width="16" height="10" viewBox="0 0 16 10" fill="none" aria-hidden="true">
+                                    <path d="M1 5.5L4.5 9L11 1" stroke="currentColor" stroke-width="1.6"
+                                          stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M6 9L12.5 1" stroke="currentColor" stroke-width="1.6"
+                                          stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+            </article>
+            {% else %}
+            <div class="empty-state" id="empty-chat-state">
+                Start the shared room with a message.
+            </div>
+            {% endfor %}
+
+            {% if messages %}
+            <div class="empty-state" id="empty-chat-state" hidden>
+                No messages in this conversation yet.
+            </div>
+            {% endif %}
+
+        </div>
+
+        {# Composer #}
+        <form class="chat-form" id="chat-form">
+            <input type="hidden" id="receiver_id" name="receiver_id" value="broadcast">
+
+            <div class="composer-row">
+                <button class="icon-btn" type="button" aria-label="Emoji" title="Emoji">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                        <line x1="9" y1="9" x2="9.01" y2="9"/>
+                        <line x1="15" y1="9" x2="15.01" y2="9"/>
+                    </svg>
+                </button>
+                <input type="file" id="file-input" hidden
+                       accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip">
+                <button class="icon-btn" type="button" id="attach-btn"
+                        aria-label="Attach file" title="Attach file">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                </button>
+
+                <div id="voice-msg-container"></div>
+
+                <label class="sr-only" for="content">Message</label>
+                <textarea class="composer-textarea"
+                          id="content"
+                          name="content"
+                          rows="1"
+                          maxlength="2000"
+                          placeholder="Message"
+                          required></textarea>
+
+                <button class="send-btn" type="submit" id="send-btn" aria-label="Send message" title="Send">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="composer-meta">
+                <span id="typing-hint">Enter sends &middot; Shift+Enter for new line</span>
+                <span id="character-count">0 / 2000</span>
+            </div>
+        </form>
+
+    </section>
+</div>
+    {# Voice call overlays (fixed position, always visible) #}
+
+    {# Incoming call banner #}
+    <div id="voice-incoming" class="voice-incoming" style="display:none"
+         role="dialog" aria-label="Incoming voice call" aria-live="assertive">
+        <div class="voice-incoming-info">
+            <div id="voice-caller-name" class="voice-caller-name">Unknown</div>
+            <div class="voice-incoming-status">Incoming voice call</div>
+        </div>
+        <button id="voice-decline-btn" class="voice-decline-btn" aria-label="Decline call">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6"/>
+                <line x1="23" y1="1" x2="1" y2="23"/>
+            </svg>
+        </button>
+        <button id="voice-accept-btn" class="voice-accept-btn" aria-label="Accept call">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6.09 6.09l.86-.86a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+        </button>
+    </div>
+
+    {# Active call bar #}
+    <div id="voice-active-bar" class="voice-active-bar" style="display:none">
+        <div class="voice-bar-info">
+            <span id="voice-bar-peer" class="voice-bar-peer"></span>
+            <span id="voice-bar-status" class="voice-bar-status"></span>
+            <span id="voice-bar-timer" class="voice-bar-timer"></span>
+        </div>
+        <button id="voice-mute-btn" class="voice-mute-btn" aria-label="Mute microphone">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+        </button>
+        <button id="voice-end-btn" class="voice-end-btn" aria-label="End call">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6"/>
+                <line x1="23" y1="1" x2="1" y2="23"/>
+            </svg>
+        </button>
+    </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/voice_chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/voice_message.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fingerprint.js') }}"></script>
+<script src="{{ url_for('static', filename='js/p2p_transfer.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}

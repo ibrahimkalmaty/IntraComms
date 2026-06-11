@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}IntraComms{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+    <nav class="navbar" aria-label="Primary navigation">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <span class="brand-mark" aria-hidden="true">IC</span>
+                <span>IntraComms</span>
+            </a>
+            <div class="nav-actions">
+                {% if current_user.is_authenticated %}
+                    <span class="user-pill">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        {{ current_user.username }}
+                    </span>
+                    {% if current_user.is_admin() %}
+                        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_dashboard') }}">Admin</a>
+                    {% endif %}
+                    <form action="{{ url_for('logout') }}" method="post">
+                        <button class="btn btn-outline-secondary btn-sm" type="submit">Logout</button>
+                    </form>
+                {% else %}
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('login') }}">Login</a>
+                    <a class="btn btn-primary btn-sm" href="{{ url_for('register') }}">Register</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <main class="container page-shell">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-stack" role="status" aria-live="polite">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ 'danger' if category == 'error' else category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+    {% block scripts %}{% endblock %}
+
+    {% if current_user.is_authenticated %}
+    {# ── E2EE key bootstrap ─────────────────────────────────────────────────
+         Runs on every authenticated page so the user's public key is always
+         registered with the server — not only when the dashboard is open.
+         Shares the same localStorage slot as chat.js so both scripts use the
+         same identity keypair.
+    ─────────────────────────────────────────────────────────────────────── #}
+    <script>
+    (function () {
+        // chat.js owns E2EE on the dashboard — skip to avoid a double-keygen race.
+        if (document.getElementById("chat-data")) return;
+        if (!window.crypto || !window.crypto.subtle) return;
+        var KEY = "intracomms_priv_jwk_v1";
+        function b642ab(b64) {
+            var s = atob(b64), a = new Uint8Array(s.length);
+            for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+            return a.buffer;
+        }
+        function ab2b64(buf) {
+            return btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+        }
+        function post(pubB64) {
+            fetch("/api/me/pubkey", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ public_key: pubB64 })
+            }).catch(function () {});
+        }
+        var stored = null;
+        try { stored = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) {}
+        if (stored && stored.x) {
+            // Load existing keypair and re-register (idempotent on server)
+            var pubJwk = { kty: stored.kty, crv: stored.crv,
+                           x: stored.x, y: stored.y, ext: true };
+            crypto.subtle.importKey("jwk", pubJwk,
+                { name: "ECDH", namedCurve: "P-256" }, true, [])
+            .then(function (pk) { return crypto.subtle.exportKey("spki", pk); })
+            .then(function (buf) { post(ab2b64(buf)); })
+            .catch(function () {
+                localStorage.removeItem(KEY); // corrupted — will regenerate
+            });
+        } else {
+            // First visit: generate keypair, persist, register
+            crypto.subtle.generateKey(
+                { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]
+            ).then(function (kp) {
+                return Promise.all([
+                    crypto.subtle.exportKey("jwk",  kp.privateKey),
+                    crypto.subtle.exportKey("spki", kp.publicKey)
+                ]);
+            }).then(function (r) {
+                try { localStorage.setItem(KEY, JSON.stringify(r[0])); } catch (_) {}
+                post(ab2b64(r[1]));
+            });
+        }
+    })();
+    </script>
+    {% endif %}
+</body>
+</html>

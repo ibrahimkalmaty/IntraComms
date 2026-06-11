@@ -1,0 +1,23 @@
+# Virtual environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Database (regenerate with: flask --app server/server.py init-db)
+intracomms.db
+
+# Secrets & TLS keys — never commit these
+.env
+key.pem
+cert.pem
+
+# User-uploaded files
+uploads/*
+!uploads/.gitkeep
+
+# Local junk
+tmp_wheels/
+.claude/settings.local.json
