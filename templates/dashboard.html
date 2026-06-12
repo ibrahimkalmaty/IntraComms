@@ -460,10 +460,10 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/voice_chat.js') }}"></script>
-<script src="{{ url_for('static', filename='js/voice_message.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fingerprint.js') }}"></script>
-<script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
-<script src="{{ url_for('static', filename='js/p2p_transfer.js') }}"></script>
-<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ static_v('js/voice_chat.js') }}"></script>
+<script src="{{ static_v('js/voice_message.js') }}"></script>
+<script src="{{ static_v('js/fingerprint.js') }}"></script>
+<script src="{{ static_v('js/notifications.js') }}"></script>
+<script src="{{ static_v('js/p2p_transfer.js') }}"></script>
+<script src="{{ static_v('js/chat.js') }}"></script>
 {% endblock %}

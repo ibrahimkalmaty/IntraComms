@@ -9,7 +9,8 @@
         "-Command",
         "$env:INTRACOMMS_HTTP='1'; & 'D:\\IntraComms\\venv\\Scripts\\python.exe' 'D:\\IntraComms\\server\\server.py'"
       ],
-      "port": 5000
+      "port": 5000,
+      "autoPort": true
     }
   ]
 }

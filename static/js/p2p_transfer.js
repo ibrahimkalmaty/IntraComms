@@ -4,17 +4,19 @@
 // Rebuilt per RFC 8831 (WebRTC Data Channels) and RFC 8260 (interleaving)
 //
 // Root cause of the 256 KB freeze in v2:
-//   RFC 8831 §6.6 SHOULD limit message size to 16 KB without interleaving.
-//   256 KB messages caused SCTP reassembly buffer stall on the receiver:
-//   its SCTP layer waited for all 256 KB fragments before delivering ANY
-//   data to JavaScript — the apparent freeze.
+//   v2's packets were 256 KB of payload + 34 bytes of framing — just over
+//   the peer's SCTP max-message-size (Chrome advertises 262144 bytes).
+//   Oversized sends abort the channel, freezing the transfer.
 //
 // Key changes from v2:
-//   - Message size: 16 KB (RFC 8831 §6.6 SHOULD limit without interleaving)
+//   - Message size: 64 KB + framing, safely under max-message-size on
+//     every browser (throughput is bounded by messages/second, so
+//     messages are as large as safely possible)
 //   - Multiple DataChannels: N streams share SCTP association, interleaved
-//   - Nagle disabled: immediate send per RFC 8831 §6.6
 //   - Stream priority: data=256 "normal", control=512 "high" per §6.4
 //   - Credit system: retained for JS-layer flow control
+//   - Progress callbacks throttled to ~10/s (per-chunk DOM updates were
+//     a measurable drag at high message rates)
 //
 // Public API (unchanged from v2):
 //   P2PTransfer.setSocketSend(fn)                   fn(event, data)
@@ -31,14 +33,22 @@
 
 const P2PTransfer = (() => {
 
-  // ── RFC 8831 §6.6: message size SHOULD be ≤ 16 KB without interleaving
-  // We use 16 KB exactly. The browser's SCTP implementation handles
-  // fragmentation at the IP layer per RFC 8831 §5 (PMTU discovery).
+  // ── Message size ──────────────────────────────────────────────────
+  // DataChannel throughput is bounded by messages/second, so messages
+  // should be as large as safely possible. The ceiling is the peer's
+  // SDP max-message-size (Chrome advertises 262144). v2 died here: its
+  // 256 KB payload + 34 bytes of framing exceeded that limit and the
+  // channel closed mid-transfer. 64 KB + framing stays far below the
+  // limit on every browser while cutting per-message overhead 4× vs
+  // the RFC 8831 §6.6 conservative 16 KB.
   // ─────────────────────────────────────────────────────────────────
-  const MSG_SIZE       = 16 * 1024;    // 16 KB — RFC 8831 §6.6 limit
+  const MSG_SIZE       = 64 * 1024;    // 64 KB payload per SCTP message
   const N_STREAMS      = 4;            // parallel SCTP streams (interleaving)
-  const INITIAL_CREDITS = 16;          // larger pool — smaller messages need more
-  const CREDIT_GRANT   = 8;            // grant credits in batches
+  // Credit window: 128 × 64 KB = 8 MB in flight. The window must cover
+  // bandwidth × round-trip (incl. decrypt + grant latency) or the
+  // sender idles between grants.
+  const INITIAL_CREDITS = 128;
+  const CREDIT_GRANT   = 32;           // grant credits in batches
   const BUFFER_HIGH    = 4 * 1024 * 1024;   // 4 MB buffer pause threshold
   const BUFFER_LOW     = 512 * 1024;         // 512 KB resume threshold
 
@@ -257,8 +267,13 @@ const P2PTransfer = (() => {
       dc.send(pkt.buffer);
 
       state.bytesSent += raw.byteLength;
-      const cb = _onProgress.get(state.transferId);
-      if (cb) cb(state.bytesSent, state.file.size);
+      // Throttle UI progress to ~10/s; always fire the 100% update
+      const now = Date.now();
+      if (now - (state._progAt || 0) > 100 || state.bytesSent >= state.file.size) {
+        state._progAt = now;
+        const cb = _onProgress.get(state.transferId);
+        if (cb) cb(state.bytesSent, state.file.size);
+      }
     };
 
     while (true) {
@@ -353,10 +368,16 @@ const P2PTransfer = (() => {
 
       if (channel.label === CTRL_LABEL) {
         state.ctrlDC = channel;
-        channel.onopen = () => {
-          // Grant initial credits immediately
+        // The channel may already be open when ondatachannel fires —
+        // waiting only on onopen would silently skip the initial grant
+        // and strand the sender once its local credits run out.
+        const grantInitial = () => {
+          if (state._initGranted) return;
+          state._initGranted = true;
           _grant(state, INITIAL_CREDITS);
         };
+        channel.onopen = grantInitial;
+        if (channel.readyState === "open") grantInitial();
         channel.onmessage = ({ data }) => _handleCtrl(state, data);
 
       } else if (channel.label.startsWith(DATA_PREFIX)) {
@@ -407,8 +428,13 @@ const P2PTransfer = (() => {
         state.chunks.get(shardIdx).set(seq, plain);
         state.totalReceived += plain.byteLength;
 
-        const cb = _onProgress.get(state.transferId);
-        if (cb) cb(state.totalReceived, state.meta.size);
+        // Throttle UI progress to ~10/s; always fire the 100% update
+        const now = Date.now();
+        if (now - (state._progAt || 0) > 100 || state.totalReceived >= state.meta.size) {
+          state._progAt = now;
+          const cb = _onProgress.get(state.transferId);
+          if (cb) cb(state.totalReceived, state.meta.size);
+        }
 
         // Grant credits after every CREDIT_GRANT messages
         // This is receiver-driven: sender cannot exceed this pace

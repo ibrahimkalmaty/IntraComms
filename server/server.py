@@ -530,6 +530,20 @@ def create_app() -> Flask:
     login_manager.init_app(app)
     socketio.init_app(app, cors_allowed_origins="*")
 
+    @app.context_processor
+    def _static_versioning():
+        # Append the file's mtime to static URLs so browsers re-fetch
+        # whenever a JS/CSS file changes. Without this, LAN clients keep
+        # stale cached scripts after a server update — two peers running
+        # different protocol versions breaks P2P transfers.
+        def static_v(filename: str) -> str:
+            try:
+                version = int((BASE_DIR / "static" / filename).stat().st_mtime)
+            except OSError:
+                version = 0
+            return url_for("static", filename=filename, v=version)
+        return {"static_v": static_v}
+
     register_routes(app)
     register_cli(app)
 
@@ -1745,5 +1759,5 @@ if __name__ == "__main__":
         ssl_ok = _ensure_ssl_cert(_cert, _key)
     # eventlet (used by Flask-SocketIO) takes certfile/keyfile, not ssl_context
     ssl_kwargs = {"certfile": str(_cert), "keyfile": str(_key)} if ssl_ok else {}
-    socketio.run(app, host="0.0.0.0", debug=debug_mode, use_reloader=debug_mode,
-                 **ssl_kwargs)
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "5000")),
+                 debug=debug_mode, use_reloader=debug_mode, **ssl_kwargs)

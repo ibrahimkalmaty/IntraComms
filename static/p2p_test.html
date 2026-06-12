@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>P2P loopback test</title>
+<style>
+  body { font: 13px monospace; margin: 20px; }
+  #log { white-space: pre; }
+</style>
+</head>
+<body>
+<h3>P2P transfer loopback test</h3>
+<button id="run">Run 50 MB transfer</button>
+<div id="log"></div>
+<script>
+const logEl = document.getElementById("log");
+const lines = [];
+function log(s) {
+  lines.push(s);
+  logEl.textContent = lines.join("\n");
+  console.log("[TEST]", s);
+}
+window.__testState = { done: false, error: null, sent: 0, recv: 0, log: lines };
+
+// Load p2p_transfer.js twice into separate scopes so sender and receiver
+// each get their own module instance (the singleton keys transfers by id,
+// which collides when one instance plays both roles).
+async function makeInstance() {
+  const src = await (await fetch("/static/js/p2p_transfer.js?nocache=" + Math.random())).text();
+  return new Function(src + "; return P2PTransfer;")();
+}
+
+function b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+
+document.getElementById("run").addEventListener("click", async () => {
+  try {
+    const A = await makeInstance();   // sender
+    const B = await makeInstance();   // receiver
+
+    // Receiver identity keypair (ECDH P-256, same as the app)
+    const kp = await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]);
+    const pubB64 = b64(await crypto.subtle.exportKey("spki", kp.publicKey));
+
+    // Loopback signalling: route socket events directly between instances
+    A.setSocketSend((ev, data) => {
+      if (ev === "p2p_offer") {
+        B.handleOffer(Object.assign({ sender_id: 1, sender_name: "A" }, data), kp.privateKey)
+          .catch(e => { window.__testState.error = "handleOffer: " + e; log("ERR handleOffer " + e); });
+      } else if (ev === "p2p_ice") {
+        B.handleIce(data);
+      }
+    });
+    B.setSocketSend((ev, data) => {
+      if (ev === "p2p_answer") A.handleAnswer(data).catch(e => log("ERR handleAnswer " + e));
+      else if (ev === "p2p_ice") A.handleIce(data);
+    });
+    B.onIncoming((id) => { log("offer received, accepting"); B.accept(id); });
+
+    // 50 MB synthetic file
+    const SIZE = 50 * 1024 * 1024;
+    const file = new File([new Uint8Array(SIZE)], "test.bin",
+                          { type: "application/octet-stream" });
+
+    const t0 = Date.now();
+    const id = await A.sendFile(file, 2, pubB64);
+    log("transfer started " + id);
+
+    A.onProgress(id, (sent) => { window.__testState.sent = sent; });
+    B.onProgress(id, (recv) => { window.__testState.recv = recv; });
+    B.onComplete(id, (name, size, elapsed) => {
+      window.__testState.done = true;
+      log("COMPLETE " + name + " " + size + " bytes in " + elapsed.toFixed(1) +
+          "s = " + (size / elapsed / 1048576).toFixed(1) + " MB/s");
+    });
+
+    // Per-second progress + stall detector
+    let lastRecv = -1, stallTicks = 0;
+    const iv = setInterval(() => {
+      const st = window.__testState;
+      const el = ((Date.now() - t0) / 1000).toFixed(0);
+      log(`t=${el}s sent=${(st.sent/1048576).toFixed(1)}MB recv=${(st.recv/1048576).toFixed(1)}MB`);
+      if (st.done) { clearInterval(iv); return; }
+      if (st.recv === lastRecv) {
+        stallTicks++;
+        if (stallTicks >= 5) {
+          log("*** STALLED for 5s at recv=" + st.recv + " sent=" + st.sent + " ***");
+          window.__testState.error = "stall";
+          clearInterval(iv);
+        }
+      } else { stallTicks = 0; }
+      lastRecv = st.recv;
+    }, 1000);
+  } catch (e) {
+    window.__testState.error = String(e);
+    log("ERR " + e + "\n" + (e.stack || ""));
+  }
+});
+</script>
+</body>
+</html>
