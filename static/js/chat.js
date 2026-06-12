@@ -1409,32 +1409,28 @@
                 dot.classList.toggle("status-dot-offline", !isOn);
                 dot.setAttribute("aria-label", isOn ? "Online" : "Offline");
             });
-        } else if (type === "p2p_offer") {
-            if (typeof P2PTransfer !== "undefined" && E2EE.getPrivateKey()) {
+        } else if (type === "transfer_offer") {
+            if (typeof FastTransfer !== "undefined" && E2EE.getPrivateKey()) {
                 _p2pSenders.set(payload.transfer_id, {
                     id: payload.sender_id, name: payload.sender_name || "Someone"
                 });
-                P2PTransfer.handleOffer(payload, E2EE.getPrivateKey()).catch(function (e) {
-                    console.error("[P2P] handleOffer error", e);
+                FastTransfer.handleOffer(payload, E2EE.getPrivateKey()).catch(function (e) {
+                    console.error("[FastTransfer] handleOffer error", e);
                 });
                 if (typeof Notify !== "undefined") Notify.show({
                     title:  (payload.sender_name || "Someone") + " wants to send you a file",
-                    body:   (payload.file_name || "file") + " · " + formatBytes(payload.file_size || 0),
-                    tag:    "p2p-" + payload.transfer_id,
+                    body:   formatBytes(payload.file_size || 0),
+                    tag:    "ft-" + payload.transfer_id,
                     chatId: payload.sender_id,
                 });
             }
-        } else if (type === "p2p_answer") {
-            if (typeof P2PTransfer !== "undefined")
-                P2PTransfer.handleAnswer(payload).catch(function (e) {
-                    console.error("[P2P] handleAnswer error", e);
-                });
-        } else if (type === "p2p_ice") {
-            if (typeof P2PTransfer !== "undefined")
-                P2PTransfer.handleIce(payload).catch(function (e) {
-                    console.warn("[P2P] handleIce error", e);
-                });
-        } else if (type === "p2p_decline") {
+        } else if (type === "transfer_accept") {
+            // Sender side: receiver accepted and is now downloading.
+            setStatus("Recipient accepted — transferring…");
+        } else if (type === "transfer_complete") {
+            // Sender side: receiver finished downloading.
+            setStatus("File delivered ✓");
+        } else if (type === "transfer_decline") {
             var decCard = _p2pCards.get(payload.transfer_id);
             if (decCard) {
                 decCard.fail("Recipient declined the transfer");
@@ -1444,7 +1440,7 @@
             if (typeof Notify !== "undefined") Notify.show({
                 title: "File transfer declined",
                 body:  "The recipient declined your file.",
-                tag:   "p2p-" + payload.transfer_id,
+                tag:   "ft-" + payload.transfer_id,
             });
         } else if (type === "call_invite") {
             if (typeof VoiceChat !== "undefined") VoiceChat.handleInvite(payload);
@@ -1727,15 +1723,15 @@
         var STORE_MAX  = 50 * 1024 * 1024;   // server upload ceiling
         var receiverId = receiverEl ? receiverEl.value : "broadcast";
 
-        // Large files in direct messages → P2P (server cannot store these)
+        // Large files in direct messages → FastTransfer (relayed, not stored)
         if (file.size > P2P_MIN && receiverId !== "broadcast"
-                && typeof P2PTransfer !== "undefined") {
+                && typeof FastTransfer !== "undefined") {
             _uploadFileP2P(file, receiverId);
             return;
         }
 
         if (file.size > STORE_MAX) {
-            setStatus("File too large (max 50 MB). Large files can only be sent in direct messages via P2P.");
+            setStatus("File too large (max 50 MB). Large files can only be sent in direct messages.");
             return;
         }
 
@@ -1780,28 +1776,33 @@
                 return;
             }
             var card = createTransferCard(label, file.size, true, receiverId);
-            setStatus("Connecting P2P to " + activeChatName + "…");
+            setStatus("Sending " + label + " to " + activeChatName + "…");
 
-            P2PTransfer.sendFile(file, Number(receiverId), recipientPub)
+            FastTransfer.send(file, Number(receiverId), recipientPub)
                 .then(function (transferId) {
                     _p2pCards.set(transferId, card);
-                    P2PTransfer.onProgress(transferId, function (sent, total) {
+                    FastTransfer.onProgress(transferId, function (sent, total) {
                         card.update(sent, total);
-                        setStatus("P2P → " + label + " \xb7 " + (total ? Math.round(sent / total * 100) : 0) + "%");
+                        setStatus("Sending " + label + " \xb7 " + (total ? Math.round(sent / total * 100) : 0) + "%");
                     });
-                    P2PTransfer.onComplete(transferId, function (name, size) {
+                    FastTransfer.onComplete(transferId, function (name, size) {
                         card.complete(name, size);
                         _p2pCards.delete(transferId);
                         setStatus("Connected");
                         if (typeof Notify !== "undefined") Notify.show({
                             title: "File sent ✓",
-                            body:  name + " · " + formatBytes(size) + " delivered",
-                            tag:   "p2p-" + transferId,
+                            body:  name + " · " + formatBytes(size) + " uploaded",
+                            tag:   "ft-" + transferId,
                         });
+                    });
+                    FastTransfer.onError(transferId, function (err) {
+                        card.fail((err && err.message) || "Transfer failed");
+                        _p2pCards.delete(transferId);
+                        setStatus("File transfer failed.");
                     });
                 })
                 .catch(function (err) {
-                    card.fail(err.message || "P2P setup failed");
+                    card.fail(err.message || "Transfer setup failed");
                     setStatus("P2P transfer failed: " + (err.message || "error"));
                 });
         }
@@ -1858,12 +1859,12 @@
             statsEl.hidden = false;
             statsEl.textContent = "Starting…";
 
-            P2PTransfer.onProgress(transferId, function (recv, total) {
+            FastTransfer.onProgress(transferId, function (recv, total) {
                 var pct = total ? Math.round(recv / total * 100) : 0;
                 fillEl.style.width   = pct + "%";
                 statsEl.textContent  = pct + "% \xb7 " + formatBytes(recv) + " / " + formatBytes(total);
             });
-            P2PTransfer.onComplete(transferId, function (name, size, elapsed) {
+            FastTransfer.onComplete(transferId, function (name, size, elapsed) {
                 titleEl.textContent  = "Saved ✓";
                 statsEl.textContent  = formatBytes(size) + " \xb7 done in " + elapsed.toFixed(1) + "s";
                 actionsEl.hidden     = true;
@@ -1872,15 +1873,21 @@
                 if (typeof Notify !== "undefined") Notify.show({
                     title: "File received ✓",
                     body:  name + " · " + formatBytes(size) + " saved to Downloads",
-                    tag:   "p2p-" + transferId,
+                    tag:   "ft-" + transferId,
                 });
             });
+            FastTransfer.onError(transferId, function (err) {
+                titleEl.textContent = "Transfer failed";
+                statsEl.textContent = (err && err.message) || "Could not receive the file.";
+                actionsEl.hidden    = true;
+                _p2pSenders.delete(transferId);
+            });
 
-            P2PTransfer.accept(transferId);
+            FastTransfer.accept(transferId);
         });
 
         overlay.querySelector(".p2p-decline-btn").addEventListener("click", function () {
-            P2PTransfer.decline(transferId);
+            FastTransfer.decline(transferId);
             _p2pSenders.delete(transferId);
             overlay.remove();
         });
@@ -2361,10 +2368,10 @@
         });
     }
 
-    // ── P2P transfer wiring ─────────────────────────────────────────────────
-    if (typeof P2PTransfer !== "undefined") {
-        P2PTransfer.setSocketSend(_sendP2PEvent);
-        P2PTransfer.onIncoming(function (transferId, meta) {
+    // ── FastTransfer wiring ─────────────────────────────────────────────────
+    if (typeof FastTransfer !== "undefined") {
+        FastTransfer.setSocketSend(_sendP2PEvent);
+        FastTransfer.onIncoming(function (transferId, meta) {
             E2EE.whenReady().then(function () {
                 _showP2PIncoming(transferId, meta);
             });

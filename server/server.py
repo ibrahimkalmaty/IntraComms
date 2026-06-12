@@ -1362,6 +1362,61 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "not found"}), 404
         return jsonify({"public_key": user.public_key})
 
+    # ── FastTransfer shard pipe ───────────────────────────────────────────────
+    # POST stores one encrypted shard; GET serves a finished shard (425 while it
+    # is still uploading). Auth: only the registered sender may POST, only the
+    # registered recipient may GET. Server handles ciphertext only.
+    @app.route("/transfer/<token>/shard/<int:shard_n>", methods=["POST"])
+    @login_required
+    def ft_upload_shard(token: str, shard_n: int):
+        if not _ft_valid_token(token):
+            return "", 400
+        transfer = _ft_get(token)
+        if not transfer:
+            return "", 404
+        if transfer["sender_id"] != current_user.id:
+            return "", 403
+        if not (0 <= shard_n < transfer["n_shards"]):
+            return "", 400
+
+        data = request.get_data(cache=False)   # bounded by MAX_CONTENT_LENGTH (50 MB)
+        if not data:
+            return "", 400
+
+        shard_dir = transfer["dir"]
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        # Write to a .part file, then atomically rename so a GET never sees a
+        # half-written shard.
+        part_path  = shard_dir / f"{shard_n}.part"
+        final_path = shard_dir / str(shard_n)
+        part_path.write_bytes(data)
+        part_path.replace(final_path)
+        return "", 200
+
+    @app.route("/transfer/<token>/shard/<int:shard_n>", methods=["GET"])
+    @login_required
+    def ft_download_shard(token: str, shard_n: int):
+        if not _ft_valid_token(token):
+            return "", 400
+        transfer = _ft_get(token)
+        if not transfer:
+            return "", 404
+        if transfer["recipient_id"] != current_user.id:
+            return "", 403
+        if not (0 <= shard_n < transfer["n_shards"]):
+            return "", 400
+
+        final_path = transfer["dir"] / str(shard_n)
+        if not final_path.exists():
+            return "", 425   # Too Early — sender hasn't finished this shard yet
+        resp = send_file(
+            str(final_path),
+            mimetype="application/octet-stream",
+            conditional=True,
+        )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
 
 @socketio.on("p2p_offer")
 def handle_p2p_offer(data):
@@ -1419,6 +1474,148 @@ def handle_p2p_decline(data):
     except (TypeError, ValueError):
         return
     emit("message", {"type": "p2p_decline", "payload": data}, to=f"user_{recipient_id}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# FastTransfer — encrypted shards relayed through the server over parallel TCP.
+#
+# The server is a blind store-and-forward pipe: the sender POSTs finished
+# encrypted shards to temp files, the receiver GETs them (retrying while a
+# shard is still uploading). No request ever blocks waiting on another — this
+# is required because the app runs eventlet WITHOUT monkey-patching, so a
+# blocking wait inside a request would stall the entire server. Mirrors the
+# existing disk-backed /upload + /uploads/<id> routes.
+#
+# The server sees ciphertext shards only: the AES key is ECIES-sealed to the
+# recipient and the filename lives in an encrypted metadata blob — both travel
+# over the WebSocket, never through these routes.
+# ════════════════════════════════════════════════════════════════════════════
+
+_FT_DIR       = _TEMP_DIR / "intracomms_transfers"   # staging for encrypted shards
+_ft_transfers: dict = {}                              # token → transfer record
+_ft_lock      = threading.Lock()
+_FT_TTL       = 600                                   # purge abandoned transfers after 10 min
+_FT_TOKEN_CHARS = set("0123456789abcdefABCDEF-")
+
+
+def _ft_valid_token(token) -> bool:
+    """Accept only UUID-shaped tokens — prevents path traversal in the temp dir."""
+    return (isinstance(token, str) and 8 <= len(token) <= 64
+            and all(c in _FT_TOKEN_CHARS for c in token))
+
+
+def _ft_sweep() -> None:
+    """Drop transfers older than the TTL and delete their staged shards."""
+    now = time.time()
+    with _ft_lock:
+        dead = [t for t, r in _ft_transfers.items() if now - r["created_at"] > _FT_TTL]
+        records = [_ft_transfers.pop(t) for t in dead]
+    for rec in records:
+        shutil.rmtree(rec["dir"], ignore_errors=True)
+
+
+def _ft_register(token, n_shards, sender_id, recipient_id) -> None:
+    _ft_sweep()
+    shard_dir = _FT_DIR / token
+    with _ft_lock:
+        _ft_transfers[token] = {
+            "dir":          shard_dir,
+            "n_shards":     n_shards,
+            "sender_id":    sender_id,
+            "recipient_id": recipient_id,
+            "created_at":   time.time(),
+        }
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _ft_get(token):
+    with _ft_lock:
+        return _ft_transfers.get(token)
+
+
+def _ft_purge(token) -> None:
+    with _ft_lock:
+        rec = _ft_transfers.pop(token, None)
+    if rec:
+        shutil.rmtree(rec["dir"], ignore_errors=True)
+
+
+@socketio.on("transfer_offer")
+def handle_transfer_offer(data):
+    """Register a transfer and relay the offer (sealed key + encrypted meta)."""
+    if not current_user.is_authenticated:
+        return False
+    if not isinstance(data, dict):
+        return
+    token = str(data.get("transfer_id", ""))
+    try:
+        recipient_id = int(data.get("recipient_id"))
+        n_shards     = int(data.get("n_shards", 1))
+    except (TypeError, ValueError):
+        return
+    if not _ft_valid_token(token) or not (1 <= n_shards <= 16):
+        return
+    recipient = db.session.get(User, recipient_id)
+    if not recipient or not recipient.is_active:
+        return
+
+    _ft_register(token, n_shards, current_user.id, recipient_id)
+
+    data["sender_id"]   = current_user.id
+    data["sender_name"] = current_user.username
+    emit("message", {"type": "transfer_offer", "payload": data}, to=f"user_{recipient_id}")
+
+
+@socketio.on("transfer_accept")
+def handle_transfer_accept(data):
+    """Relay the receiver's acceptance back to the sender (UI only)."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return False if not current_user.is_authenticated else None
+    try:
+        recipient_id = int(data.get("recipient_id"))
+    except (TypeError, ValueError):
+        return
+    emit("message", {"type": "transfer_accept", "payload": data}, to=f"user_{recipient_id}")
+
+
+@socketio.on("transfer_decline")
+def handle_transfer_decline(data):
+    """Relay a decline to the sender and purge the staged shards."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return False if not current_user.is_authenticated else None
+    token = str(data.get("transfer_id", ""))
+    try:
+        recipient_id = int(data.get("recipient_id"))
+    except (TypeError, ValueError):
+        return
+    if _ft_valid_token(token):
+        _ft_purge(token)
+    emit("message", {"type": "transfer_decline", "payload": data}, to=f"user_{recipient_id}")
+
+
+@socketio.on("transfer_complete")
+def handle_transfer_complete(data):
+    """Receiver finished downloading — notify sender and free the shards."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return False if not current_user.is_authenticated else None
+    token = str(data.get("transfer_id", ""))
+    try:
+        recipient_id = int(data.get("recipient_id"))
+    except (TypeError, ValueError):
+        return
+    if _ft_valid_token(token):
+        _ft_purge(token)
+    emit("message", {"type": "transfer_complete", "payload": data}, to=f"user_{recipient_id}")
+
+
+@socketio.on("transfer_error")
+def handle_transfer_error(data):
+    """Either side hit an error — purge staged shards if any."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return False if not current_user.is_authenticated else None
+    token = str(data.get("transfer_id", ""))
+    if _ft_valid_token(token):
+        _ft_purge(token)
 
 
 @socketio.on("call_invite")
