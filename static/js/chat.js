@@ -1872,7 +1872,7 @@
                 setTimeout(function () { overlay.remove(); }, 3000);
                 if (typeof Notify !== "undefined") Notify.show({
                     title: "File received ✓",
-                    body:  name + " · " + formatBytes(size) + " saved to Downloads",
+                    body:  name + " · " + formatBytes(size) + " saved",
                     tag:   "ft-" + transferId,
                 });
             });

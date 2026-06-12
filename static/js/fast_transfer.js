@@ -43,11 +43,20 @@ const FastTransfer = (() => {
   // request, so a shard must stay under the server's MAX_CONTENT_LENGTH
   // (50 MB). 32 MB leaves head-room for the 12 B IV + 16 B tag.
   const SHARD_MAX   = 32 * 1024 * 1024;   // max bytes of plaintext per shard
-  const MAX_SHARDS  = 16;                  // server caps n_shards at 16
-  const MAX_FILE    = SHARD_MAX * MAX_SHARDS;  // 512 MB hard ceiling
+  const MAX_SHARDS  = 2048;                // server caps n_shards to match
+  const MAX_FILE    = SHARD_MAX * MAX_SHARDS;  // 64 GB ceiling (effectively none)
   const CONCURRENCY = 4;                    // parallel shard uploads/downloads
   const GET_RETRY_MS = 200;                 // poll interval while shard uploads
-  const GET_RETRY_MAX = 900;                // ×200ms = 3 min max wait per shard
+  const GET_RETRY_MAX = 1800;               // ×200ms = 6 min max wait per shard
+
+  // Receiver delivery strategy by file size:
+  //   ≤ STREAM_THRESHOLD          → buffer in RAM, auto-download (no save dialog)
+  //   > STREAM_THRESHOLD + FS API → stream shards straight to disk (unbounded)
+  //   > BLOB_MAX without FS API   → refuse (would exhaust memory)
+  // The File System Access API (showSaveFilePicker) exists on Chrome/Edge and
+  // needs a secure context — both true for IntraComms over HTTPS on the LAN.
+  const STREAM_THRESHOLD = 256 * 1024 * 1024;   // 256 MB
+  const BLOB_MAX         = 512 * 1024 * 1024;   // 512 MB in-memory fallback cap
 
   let _socketSend   = null;
   const _pending    = new Map();   // transferId → receiver pending state
@@ -220,35 +229,80 @@ const FastTransfer = (() => {
     const { fileKey, sender_id, n_shards, meta } = p;
     const startTime = Date.now();
 
+    // Decide how to deliver, and obtain a disk writable for big files BEFORE
+    // any await — showSaveFilePicker must run inside the click gesture.
+    const canStream = typeof window.showSaveFilePicker === "function";
+    let writable = null;
+    if (meta.size > STREAM_THRESHOLD && canStream) {
+      try {
+        const handle = await window.showSaveFilePicker({ suggestedName: meta.name });
+        writable = await handle.createWritable();
+      } catch (e) {
+        // User dismissed the save dialog → decline the transfer.
+        _socketSend("transfer_decline", { transfer_id: transferId, recipient_id: sender_id });
+        const cb = _onError.get(transferId);
+        if (cb) cb(new Error("Save cancelled"));
+        return;
+      }
+    } else if (meta.size > BLOB_MAX && !canStream) {
+      const cb = _onError.get(transferId);
+      if (cb) cb(new Error(
+        "File is " + (meta.size / 1073741824).toFixed(1) +
+        " GB — open IntraComms in Chrome or Edge to receive files this large."));
+      _socketSend("transfer_decline", { transfer_id: transferId, recipient_id: sender_id });
+      return;
+    }
+
     // Let the sender's UI know we accepted
     _socketSend("transfer_accept", { transfer_id: transferId, recipient_id: sender_id });
 
     let received = 0;
-    try {
-      const idxs = Array.from({ length: n_shards }, (_, i) => i);
-      const parts = await _pool(idxs, CONCURRENCY, async (idx) => {
-        const buf = await _getShard(transferId, idx);
-        const view = new Uint8Array(buf);
-        const iv   = view.slice(0, 12);
-        const enc  = view.slice(12);
-        const dec  = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, fileKey, enc);
-        received += dec.byteLength;
-        const cb = _onProgress.get(transferId);
-        if (cb) cb(received, meta.size);
-        return dec;   // index preserved by _pool
-      });
+    const reportProgress = () => {
+      const cb = _onProgress.get(transferId);
+      if (cb) cb(received, meta.size);
+    };
 
-      // Build the file from shard buffers in order. The Blob constructor
-      // lets the browser back large data on disk — no 512 MB contiguous
-      // allocation needed.
-      const blob = new Blob(parts.map(b => new Uint8Array(b)), { type: meta.type });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href = url; a.download = meta.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    try {
+      if (writable) {
+        // ── Stream to disk, in order, with 1-ahead prefetch ──────────────
+        // Memory stays ~2 shards regardless of file size. Decrypt/fetch of
+        // the next shard overlaps the disk write of the current one.
+        const fetchDecrypt = async (idx) => {
+          const v   = new Uint8Array(await _getShard(transferId, idx));
+          return crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: v.slice(0, 12) }, fileKey, v.slice(12)
+          );
+        };
+        let nextDec = fetchDecrypt(0);
+        for (let idx = 0; idx < n_shards; idx++) {
+          const dec = await nextDec;
+          if (idx + 1 < n_shards) nextDec = fetchDecrypt(idx + 1);
+          await writable.write(new Uint8Array(dec));
+          received += dec.byteLength;
+          reportProgress();
+        }
+        await writable.close();
+      } else {
+        // ── In-memory: parallel download, decrypt, assemble Blob ─────────
+        const idxs = Array.from({ length: n_shards }, (_, i) => i);
+        const parts = await _pool(idxs, CONCURRENCY, async (idx) => {
+          const v   = new Uint8Array(await _getShard(transferId, idx));
+          const dec = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: v.slice(0, 12) }, fileKey, v.slice(12)
+          );
+          received += dec.byteLength;
+          reportProgress();
+          return dec;   // index preserved by _pool
+        });
+        const blob = new Blob(parts.map(b => new Uint8Array(b)), { type: meta.type });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement("a");
+        a.href = url; a.download = meta.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }
 
       _socketSend("transfer_complete", { transfer_id: transferId, recipient_id: sender_id });
 
@@ -258,6 +312,7 @@ const FastTransfer = (() => {
       const cb = _onComplete.get(transferId);
       if (cb) cb(meta.name, meta.size, elapsed);
     } catch (err) {
+      try { if (writable) await writable.abort(); } catch (_) {}
       const cb = _onError.get(transferId);
       if (cb) cb(err);
       _socketSend("transfer_error", { transfer_id: transferId, recipient_id: sender_id });

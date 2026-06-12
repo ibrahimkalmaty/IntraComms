@@ -1378,6 +1378,7 @@ def register_routes(app: Flask) -> None:
             return "", 403
         if not (0 <= shard_n < transfer["n_shards"]):
             return "", 400
+        transfer["created_at"] = time.time()   # keep alive while actively uploading
 
         data = request.get_data(cache=False)   # bounded by MAX_CONTENT_LENGTH (50 MB)
         if not data:
@@ -1405,6 +1406,7 @@ def register_routes(app: Flask) -> None:
             return "", 403
         if not (0 <= shard_n < transfer["n_shards"]):
             return "", 400
+        transfer["created_at"] = time.time()   # keep alive while actively downloading
 
         final_path = transfer["dir"] / str(shard_n)
         if not final_path.exists():
@@ -1494,7 +1496,7 @@ def handle_p2p_decline(data):
 _FT_DIR       = _TEMP_DIR / "intracomms_transfers"   # staging for encrypted shards
 _ft_transfers: dict = {}                              # token → transfer record
 _ft_lock      = threading.Lock()
-_FT_TTL       = 600                                   # purge abandoned transfers after 10 min
+_FT_TTL       = 1800                                  # purge after 30 min of inactivity
 _FT_TOKEN_CHARS = set("0123456789abcdefABCDEF-")
 
 
@@ -1553,7 +1555,7 @@ def handle_transfer_offer(data):
         n_shards     = int(data.get("n_shards", 1))
     except (TypeError, ValueError):
         return
-    if not _ft_valid_token(token) or not (1 <= n_shards <= 16):
+    if not _ft_valid_token(token) or not (1 <= n_shards <= 2048):
         return
     recipient = db.session.get(User, recipient_id)
     if not recipient or not recipient.is_active:
