@@ -156,6 +156,10 @@ class ReportPDF(FPDF):
         if col_widths is None:
             col_widths = [w / n] * n
 
+        # Normalise ragged rows to exactly n cells so per-column indexing is safe
+        # (a stray cell would otherwise overrun col_widths).
+        rows = [list(r)[:n] + [""] * (n - len(r)) for r in rows]
+
         row_h = 7
         # header
         self.set_fill_color(*NAVY)
@@ -371,7 +375,7 @@ def build_cover(pdf: ReportPDF):
         ("Student ID",     "LC000111000882"),
         ("Institution",    "Lincoln University College"),
         ("Program",        "Computer Software Engineering"),
-        ("Date",           "May 2026"),
+        ("Date",           "June 2026"),
     ]
     for k, v in details:
         pdf.set_text_color(147, 197, 253)
@@ -385,7 +389,7 @@ def build_cover(pdf: ReportPDF):
     # Badge row
     pdf.ln(14)
     badges = [("Flask", BLUE), ("Socket.IO", GREEN), ("AES-256-GCM", RED),
-              ("SQLite", GRAY), ("WebRTC", (109, 40, 217))]
+              ("SQLite", GRAY), ("ECDH P-256", (109, 40, 217))]
     total_w = sum(pdf.get_string_width(t) + 12 for t, _ in badges) + (len(badges) - 1) * 4
     pdf.set_x((pdf.w - total_w) / 2)
     for text, color in badges:
