@@ -122,8 +122,12 @@
                         data-chat-kind="direct"
                         data-color-index="{{ user.id % 8 }}"
                         aria-pressed="false" aria-selected="false">
-                    <span class="avatar avatar-sm avatar-c{{ user.id % 8 }}" aria-hidden="true">
-                        {{ user.username[:1]|upper }}
+                    <span class="avatar avatar-sm avatar-c{{ user.id % 8 }}" aria-hidden="true" style="overflow:hidden;">
+                        {% if user.avatar_thumb_filename %}
+                            <img src="{{ url_for('avatar_thumb', user_id=user.id) }}" alt="{{ user.username }} avatar">
+                        {% else %}
+                            {{ user.username[:1]|upper }}
+                        {% endif %}
                     </span>
                     <span class="conversation-copy">
                         <span class="conversation-name-row">
@@ -133,6 +137,9 @@
                             {% endif %}
                         </span>
                         <small class="conversation-preview">{{ user.email }}</small>
+                        <small class="conversation-meta" style="display:block; margin-top:0.35rem;">
+                            <a href="{{ url_for('view_profile', user_id=user.id) }}" onclick="event.stopPropagation();" style="color:var(--accent); text-decoration:none;">View profile</a>
+                        </small>
                     </span>
                     <span class="status-dot" aria-label="Online"></span>
                 </button>

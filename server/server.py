@@ -2,6 +2,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import click
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
+from werkzeug.utils import secure_filename
 
 try:
     from PIL import Image, ImageOps
@@ -108,6 +110,21 @@ def cfg(user_id: int) -> dict:
 
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """Return True if password meets the strong password rules."""
+    if len(password) < 12:
+        return False, "Password must be at least 12 characters long."
+    if not re.search(r"[A-Z]", password):
+        return False, "Password must contain at least one uppercase letter."
+    if not re.search(r"[a-z]", password):
+        return False, "Password must contain at least one lowercase letter."
+    if not re.search(r"\d", password):
+        return False, "Password must contain at least one number."
+    if not re.search(r"[!@#$%^&*()_+\-=[\]{};:'\"\\|,.<>/?`~]", password):
+        return False, "Password must contain at least one special character."
+    return True, ""
 
 
 # ── File encryption helpers ───────────────────────────────────────────────────
@@ -579,6 +596,8 @@ def create_app() -> Flask:
         "ALTER TABLE file_records ADD COLUMN hint_category VARCHAR(16)",
         "ALTER TABLE users ADD COLUMN encrypted_priv_key TEXT",
         "ALTER TABLE users ADD COLUMN key_salt VARCHAR(32)",
+        "ALTER TABLE users ADD COLUMN avatar_filename VARCHAR(256)",
+        "ALTER TABLE users ADD COLUMN avatar_thumb_filename VARCHAR(256)",
     ]
     with app.app_context():
         for sql in _migrations:
@@ -658,10 +677,20 @@ def register_routes(app: Flask) -> None:
             username = request.form.get("username", "").strip()
             email = request.form.get("email", "").strip().lower()
             password = request.form.get("password", "")
+            password_confirm = request.form.get("password_confirm", "")
             public_key = request.form.get("public_key", "").strip() or None
 
-            if not username or not email or not password:
+            if not username or not email or not password or not password_confirm:
                 flash("Username, email, and password are required.", "error")
+                return render_template("register.html")
+
+            if password != password_confirm:
+                flash("Passwords do not match.", "error")
+                return render_template("register.html")
+
+            is_valid, password_error = validate_password_strength(password)
+            if not is_valid:
+                flash(password_error, "error")
                 return render_template("register.html")
 
             existing_user = User.query.filter(
@@ -721,6 +750,125 @@ def register_routes(app: Flask) -> None:
     def logout():
         logout_user()
         return redirect(url_for("index"))
+
+    @app.route("/profile", methods=["GET", "POST"])
+    @login_required
+    def profile():
+        user = current_user
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            email = request.form.get("email", "").strip().lower()
+            current_password = request.form.get("current_password", "")
+            new_password = request.form.get("new_password", "")
+            new_password_confirm = request.form.get("new_password_confirm", "")
+
+            if not username or not email:
+                flash("Username and email are required.", "error")
+                return render_template("profile.html", user=user, editable=True)
+
+            existing_user = User.query.filter(
+                (User.username == username) | (User.email == email)
+            ).filter(User.id != user.id).first()
+            if existing_user:
+                flash("That username or email is already taken.", "error")
+                return render_template("profile.html", user=user, editable=True)
+
+            user.username = username
+            user.email = email
+
+            if new_password or new_password_confirm or current_password:
+                if not current_password:
+                    flash("Current password is required to update your password.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+                if not user.check_password(current_password):
+                    flash("Current password is incorrect.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+                if new_password != new_password_confirm:
+                    flash("New passwords do not match.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+                is_valid, password_error = validate_password_strength(new_password)
+                if not is_valid:
+                    flash(password_error, "error")
+                    return render_template("profile.html", user=user, editable=True)
+                user.set_password(new_password)
+
+            avatar_file = request.files.get("avatar")
+            if avatar_file and avatar_file.filename:
+                if not PILLOW_AVAILABLE:
+                    flash("Image processing is unavailable on the server.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+                if not FileRecord.is_allowed_extension(avatar_file.filename):
+                    flash("Avatar must be PNG, JPG, GIF, or WEBP.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+                if not (avatar_file.mimetype or "").startswith("image/"):
+                    flash("Avatar file must be an image.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+
+                upload_dir = Path(app.config["UPLOAD_FOLDER"])
+                upload_dir.mkdir(parents=True, exist_ok=True)
+
+                raw_name = secure_filename(avatar_file.filename)
+                raw_ext = raw_name.rsplit('.', 1)[-1].lower()
+                base_name = f"user_{user.id}_avatar_{uuid.uuid4().hex}"
+                raw_path = upload_dir / f"{base_name}_raw.{raw_ext}"
+                avatar_file.save(str(raw_path))
+
+                try:
+                    full_path, thumb_path, *_ = process_photo(raw_path, base_name, upload_dir, user.id)
+                except Exception:
+                    raw_path.unlink(missing_ok=True)
+                    flash("Unable to process the uploaded avatar image.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+
+                if not full_path or not thumb_path:
+                    raw_path.unlink(missing_ok=True)
+                    flash("Unable to process the uploaded avatar image.", "error")
+                    return render_template("profile.html", user=user, editable=True)
+
+                if user.avatar_filename:
+                    (upload_dir / user.avatar_filename).unlink(missing_ok=True)
+                if user.avatar_thumb_filename:
+                    (upload_dir / user.avatar_thumb_filename).unlink(missing_ok=True)
+
+                user.avatar_filename = full_path.name
+                user.avatar_thumb_filename = thumb_path.name
+
+            db.session.commit()
+            flash("Profile updated successfully.", "success")
+            return redirect(url_for("profile"))
+
+        return render_template("profile.html", user=user, editable=True)
+
+    @app.route("/users/<int:user_id>")
+    @login_required
+    def view_profile(user_id: int):
+        user = db.session.get(User, user_id)
+        if not user or (not user.is_active and user.id != current_user.id):
+            abort(404)
+        return render_template("profile.html", user=user, editable=(current_user.id == user.id))
+
+    @app.route("/avatars/<int:user_id>")
+    def avatar(user_id: int):
+        user = db.session.get(User, user_id)
+        if not user or not user.avatar_filename:
+            abort(404)
+        file_path = Path(app.config["UPLOAD_FOLDER"]) / user.avatar_filename
+        if not file_path.exists():
+            abort(404)
+        return send_file(str(file_path), mimetype="image/webp", conditional=True)
+
+    @app.route("/avatars/<int:user_id>/thumb")
+    def avatar_thumb(user_id: int):
+        user = db.session.get(User, user_id)
+        if not user:
+            abort(404)
+        filename = user.avatar_thumb_filename or user.avatar_filename
+        if not filename:
+            abort(404)
+        thumb_path = Path(app.config["UPLOAD_FOLDER"]) / filename
+        if not thumb_path.exists():
+            abort(404)
+        return send_file(str(thumb_path), mimetype="image/webp", conditional=True)
 
     @app.route("/dashboard")
     @login_required

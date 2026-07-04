@@ -21,7 +21,16 @@
             <label class="form-label" for="password">Password</label>
             <input class="form-control" id="password" name="password"
                    type="password" autocomplete="new-password" placeholder="Choose a strong password" required>
+            <small style="color: var(--text-muted); display: block; margin-top: 0.5rem;">
+                Password must be at least 12 characters long and include uppercase, lowercase, a number, and a special character.
+            </small>
         </div>
+        <div>
+            <label class="form-label" for="password_confirm">Confirm Password</label>
+            <input class="form-control" id="password_confirm" name="password_confirm"
+                   type="password" autocomplete="new-password" placeholder="Re-enter your password" required>
+        </div>
+        <div id="password-error" style="color: #b91c1c; margin-top: 0.5rem;"></div>
         <button class="btn btn-primary" type="submit" style="margin-top:4px;">Create Account</button>
     </form>
     <p class="auth-note">Already registered? <a href="{{ url_for('login') }}">Sign in</a></p>
@@ -33,9 +42,48 @@
 (function () {
     var form = document.querySelector(".auth-form");
     if (!form || !window.crypto || !window.crypto.subtle) return;
-    form.addEventListener("submit", function () {
+    function validatePassword(password) {
+        var rules = [
+            {regex: /.{12,}/, message: "At least 12 characters."},
+            {regex: /[A-Z]/, message: "One uppercase letter."},
+            {regex: /[a-z]/, message: "One lowercase letter."},
+            {regex: /\d/, message: "One number."},
+            {regex: /[!@#$%^&*()_+\-=[\]{};:'\"\\|,.<>/?`~]/, message: "One special character."},
+        ];
+        return rules.filter(function (rule) { return !rule.regex.test(password); });
+    }
+
+    form.addEventListener("submit", function (event) {
         var pwd  = (document.getElementById("password") || {}).value || "";
+        var confirm = (document.getElementById("password_confirm") || {}).value || "";
         var user = (document.getElementById("username") || {}).value || "";
+        var errorBox = document.getElementById("password-error");
+
+        if (errorBox) {
+            errorBox.textContent = "";
+        }
+
+        var failures = validatePassword(pwd);
+        if (failures.length) {
+            event.preventDefault();
+            if (errorBox) {
+                errorBox.textContent = "Password requirements not met: " + failures.map(function (rule) { return rule.message; }).join(" ");
+            } else {
+                alert("Password requirements not met.");
+            }
+            return;
+        }
+
+        if (pwd !== confirm) {
+            event.preventDefault();
+            if (errorBox) {
+                errorBox.textContent = "Passwords do not match.";
+            } else {
+                alert("Passwords do not match.");
+            }
+            return;
+        }
+
         if (!pwd) return;
         var enc = new TextEncoder();
         crypto.subtle.importKey("raw", enc.encode(pwd), "PBKDF2", false, ["deriveBits"])

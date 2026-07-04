@@ -29,6 +29,8 @@ class User(UserMixin, db.Model):
     public_key = db.Column(db.Text, nullable=True)
     encrypted_priv_key = db.Column(db.Text, nullable=True)
     key_salt = db.Column(db.String(32), nullable=True)
+    avatar_filename = db.Column(db.String(256), nullable=True)
+    avatar_thumb_filename = db.Column(db.String(256), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(
         db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

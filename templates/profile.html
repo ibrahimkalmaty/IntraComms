@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}{{ user.username }} — Profile{% endblock %}
+
+{% block content %}
+<div class="auth-shell" style="max-width: 720px;">
+    <p class="eyebrow">User profile</p>
+    <h1>{{ user.username }}</h1>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">
+        Joined {{ user.created_at.strftime('%Y-%m-%d') }} · Role: {{ user.role }}
+    </p>
+
+    {% if editable %}
+    <form method="post" enctype="multipart/form-data" class="auth-form">
+        <div style="margin-bottom:1rem; display:flex; align-items:center; gap:1rem;">
+            <div class="avatar avatar-sm" style="overflow:hidden;">
+                {% if user.avatar_thumb_filename %}
+                    <img src="{{ url_for('avatar_thumb', user_id=user.id) }}" alt="{{ user.username }} avatar">
+                {% else %}
+                    {{ user.username[:1]|upper }}
+                {% endif %}
+            </div>
+            <div>
+                <label class="form-label" for="avatar">Profile picture</label>
+                <input class="form-control" id="avatar" name="avatar" type="file" accept="image/*">
+                <p style="font-size:.85rem;color:var(--text-muted);margin:0.35rem 0 0;">PNG, JPG, GIF, WEBP accepted.</p>
+            </div>
+        </div>
+        <div>
+            <label class="form-label" for="username">Username</label>
+            <input class="form-control" id="username" name="username" value="{{ user.username }}" required>
+        </div>
+        <div>
+            <label class="form-label" for="email">Email</label>
+            <input class="form-control" id="email" name="email" type="email" value="{{ user.email }}" required>
+        </div>
+        <hr>
+        <p style="margin-bottom: 0.5rem; font-weight: 600;">Change Password</p>
+        <div>
+            <label class="form-label" for="current_password">Current Password</label>
+            <input class="form-control" id="current_password" name="current_password" type="password" autocomplete="current-password" placeholder="Enter current password">
+        </div>
+        <div>
+            <label class="form-label" for="new_password">New Password</label>
+            <input class="form-control" id="new_password" name="new_password" type="password" autocomplete="new-password" placeholder="Leave blank to keep current password">
+        </div>
+        <div>
+            <label class="form-label" for="new_password_confirm">Confirm New Password</label>
+            <input class="form-control" id="new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" placeholder="Repeat new password">
+        </div>
+        <div id="profile-password-error" style="color: #b91c1c; margin-top: 0.5rem;"></div>
+        <button class="btn btn-primary" type="submit" style="margin-top: 8px;">Save Profile</button>
+    </form>
+    {% else %}
+    <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem;">
+        <div class="avatar avatar-sm" style="overflow:hidden;">
+            {% if user.avatar_thumb_filename %}
+                <img src="{{ url_for('avatar_thumb', user_id=user.id) }}" alt="{{ user.username }} avatar">
+            {% else %}
+                {{ user.username[:1]|upper }}
+            {% endif %}
+        </div>
+        <div>
+            <h2 style="margin:0;">{{ user.username }}</h2>
+            <p style="margin:0; color:var(--text-muted);">{{ user.email }}</p>
+        </div>
+    </div>
+    <dl class="profile-details">
+        <dt>Username</dt>
+        <dd>{{ user.username }}</dd>
+        <dt>Email</dt>
+        <dd>{{ user.email }}</dd>
+        <dt>Role</dt>
+        <dd>{{ user.role }}</dd>
+        <dt>Member since</dt>
+        <dd>{{ user.created_at.strftime('%Y-%m-%d') }}</dd>
+    </dl>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var form = document.querySelector('.auth-form');
+    if (!form) return;
+    function validatePassword(password) {
+        var rules = [
+            /.{12,}/,
+            /[A-Z]/,
+            /[a-z]/,
+            /\d/,
+            /[!@#$%^&*()_+\-=[\]{};:'\"\\|,.<>/?`~]/
+        ];
+        return rules.every(function (re) { return re.test(password); });
+    }
+    form.addEventListener('submit', function (event) {
+        var currentPassword = document.getElementById('current_password').value || '';
+        var newPassword = document.getElementById('new_password').value || '';
+        var confirmPassword = document.getElementById('new_password_confirm').value || '';
+        var errorBox = document.getElementById('profile-password-error');
+        errorBox.textContent = '';
+
+        if (!newPassword && !confirmPassword && !currentPassword) {
+            return;
+        }
+        if (!currentPassword) {
+            event.preventDefault();
+            errorBox.textContent = 'Current password is required to change your password.';
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            event.preventDefault();
+            errorBox.textContent = 'New passwords do not match.';
+            return;
+        }
+        if (newPassword && !validatePassword(newPassword)) {
+            event.preventDefault();
+            errorBox.textContent = 'New password must be 12+ characters, include uppercase, lowercase, a number, and a special character.';
+            return;
+        }
+    });
+})();
+</script>
+{% endblock %}
