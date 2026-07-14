@@ -24,8 +24,8 @@ python-magic==0.4.27           # MIME type detection for uploaded files
 # NOTE (MSYS2/MinGW Python): no pre-built wheel — build from source:
 #   pacman -S mingw-w64-x86_64-zlib mingw-w64-x86_64-libjpeg-turbo mingw-w64-x86_64-libpng mingw-w64-x86_64-libwebp
 #   pip install Pillow  (builds from source; app runs without it — graceful fallback to raw image storage)
-Pillow>=10.0.0                 # image re-encode to WebP, EXIF strip, thumbnail generation
-APScheduler>=3.10.0            # background cleanup of abandoned chunk uploads
+Pillow==10.0.0                 # image re-encode to WebP, EXIF strip, thumbnail generation (pinned)
+APScheduler==3.10.0            # background cleanup of abandoned chunk uploads (pinned)
 
 # Utilities
 python-dotenv==1.1.0           # loads .env into os.environ
